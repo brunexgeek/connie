@@ -56,7 +56,7 @@
 extern "C" {
 #endif
 
-typedef void doc_commit_callback(const uint8_t *buffer, size_t size);
+typedef void doc_commit_callback(const uint8_t *buffer, size_t size, void *data);
 
 struct connie_writer_params {
     // Pointer to the memory buffer where CBOR data will be written.
@@ -73,7 +73,7 @@ struct connie_writer {
     struct connie_writer_params params;
     uint8_t *begin;
     uint8_t *end;
-    uint8_t *cursor;
+    uint8_t *ptr;
     uint32_t size;
     uint8_t scope_index;
     uint8_t flags;

@@ -64,6 +64,20 @@ struct cbor_iter_output {
     uint16_t reserved : 4;
 };
 
+static void hex_dump(const uint8_t *data, int size);
+
+static int write_callback(const uint8_t *buffer, size_t size, void *data)
+{
+    struct connie_writer *w = (struct connie_writer*) data;
+    if (w->ptr + size >= w->end)
+        return CERR_OUT_OF_BOUNDS;
+    memcpy(w->ptr, buffer, size);
+    w->ptr += size;
+    hex_dump(w->begin, (size_t)(w->ptr - w->begin));
+    puts("---");
+    return CERR_OK;
+}
+
 static int cbor_write_fp32(struct connie_writer *writer, float value)
 {
     if (writer->flags & DWF_DRY_RUN)
@@ -71,8 +85,6 @@ static int cbor_write_fp32(struct connie_writer *writer, float value)
         writer->size += 5;
         return CERR_OK;
     }
-    if (writer->cursor + 5 >= writer->end)
-        return CERR_OUT_OF_BOUNDS;
 
     union {
         float fp;
@@ -80,14 +92,16 @@ static int cbor_write_fp32(struct connie_writer *writer, float value)
     } convert;
     convert.fp = value;
 
-    *writer->cursor++ = (7 << 5) | 26;
+    uint8_t buffer[5];
+    buffer[0] = (7 << 5) | 26;
     #if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     for (int i = 0; i < 4; i++)
-        *writer->cursor++ = (uint8_t)(convert.uint >> (8 * i));
+        buffer[1 + i] = (uint8_t)(convert.uint >> (8 * i));
     #else
     for (int i = 3; i >= 0; i--)
-        *writer->cursor++ = (uint8_t)(convert.uint >> (8 * i));
+        buffer[1 + 3 - i] = (uint8_t)(convert.uint >> (8 * i));
     #endif
+    write_callback(buffer, sizeof(buffer), writer);
     return CERR_OK;
 }
 
@@ -98,8 +112,6 @@ static int cbor_write_fp64(struct connie_writer *writer, double value)
         writer->size += 9;
         return CERR_OK;
     }
-    if (writer->cursor + 9 >= writer->end)
-        return CERR_OUT_OF_BOUNDS;
 
     union {
         double fp;
@@ -107,14 +119,16 @@ static int cbor_write_fp64(struct connie_writer *writer, double value)
     } convert;
     convert.fp = value;
 
-    *writer->cursor++ = (7 << 5) | 27;
+    uint8_t buffer[9];
+    buffer[0] = (7 << 5) | 27;
     #if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     for (int i = 0; i < 8; i++)
-        *writer->cursor++ = (uint8_t)(convert.uint >> (8 * i));
+        buffer[1 + i] = (uint8_t)(convert.uint >> (8 * i));
     #else
     for (int i = 7; i >= 0; i--)
-        *writer->cursor++ = (uint8_t)(convert.uint >> (8 * i));
+        buffer[1 + 7 - i] = (uint8_t)(convert.uint >> (8 * i));
     #endif
+    write_callback(buffer, sizeof(buffer), writer);
     return CERR_OK;
 }
 
@@ -138,52 +152,51 @@ static int cbor_write_uint(struct connie_writer *writer, uint8_t type, uint64_t 
         writer->size += bytes;
         return CERR_OK;
     }
-    else
-    if (writer->cursor + bytes >= writer->end)
-        return CERR_OUT_OF_BOUNDS;
 
+    uint8_t buffer[9];
     switch (bytes)
     {
         case 1:
-            *writer->cursor++ = (type << 5) | (uint8_t)value;
+            buffer[0] = (type << 5) | (uint8_t)value;
             break;
         case 2:
-            *writer->cursor++ = (type << 5) | 24;
-            *writer->cursor++ = (uint8_t)value;
+            buffer[0] = (type << 5) | 24;
+            buffer[1] = (uint8_t)value;
             break;
         case 3:
-            *writer->cursor++ = (type << 5) | 25;
+            buffer[0] = (type << 5) | 25;
             #if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-            *writer->cursor++ = (uint8_t)(value & 0xFF);
-            *writer->cursor++ = (uint8_t)(value >> 8);
+            buffer[1] = (uint8_t)(value & 0xFF);
+            buffer[2] = (uint8_t)(value >> 8);
             #else
-            *writer->cursor++ = (uint8_t)(value >> 8);
-            *writer->cursor++ = (uint8_t)(value & 0xFF);
+            buffer[1] = (uint8_t)(value >> 8);
+            buffer[2] = (uint8_t)(value & 0xFF);
             #endif
             break;
         case 5:
-            *writer->cursor++ = (type << 5) | 26;
+            buffer[0] = (type << 5) | 26;
             #if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
             for (int i = 0; i < 4; i++)
-                *writer->cursor++ = (uint8_t)(value >> (8 * i));
+                buffer[1 + i] = (uint8_t)(value >> (8 * i));
             #else
             for (int i = 3; i >= 0; i--)
-                *writer->cursor++ = (uint8_t)(value >> (8 * i));
+                buffer[1 + 3 - i] = (uint8_t)(value >> (8 * i));
             #endif
             break;
         case 9:
-            *writer->cursor++ = (type << 5) | 27;
+            buffer[0] = (type << 5) | 27;
             #if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
             for (int i = 0; i < 8; i++)
-                *writer->cursor++ = (uint8_t)(value >> (8 * i));
+                buffer[1 + i] = (uint8_t)(value >> (8 * i));
             #else
             for (int i = 7; i >= 0; i--)
-                *writer->cursor++ = (uint8_t)(value >> (8 * i));
+                buffer[1 + 7 - i] = (uint8_t)(value >> (8 * i));
             #endif
             break;
         default:
             return CERR_INVALID_DATA;
     }
+    write_callback(buffer, bytes, writer);
 
     return CERR_OK;
 }
@@ -193,17 +206,16 @@ static int cbor_write_string(struct connie_writer *writer, const char *str)
     RETURN_IF_INVALID(writer);
 
     size_t len = strlen(str) + 1;
-    cbor_write_uint(writer, CT_TSTR, len); // definite-length text string
     if (writer->flags & DWF_DRY_RUN)
+    {
         writer->size += len;
+        return CERR_OK;
+    }
     else
     {
-        if (writer->cursor + len >= writer->end)
-            RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-        memcpy(writer->cursor, str, len);
-        writer->cursor += len;
+        RETURN_ON_ERROR(cbor_write_uint(writer, CT_TSTR, len)); // definite-length text string
+        return write_callback((const uint8_t*) str, len, writer);
     }
-    return CERR_OK;
 }
 
 static int cbor_read_next(struct cbor_iter *iter, struct cbor_iter_output *out)
@@ -221,9 +233,11 @@ static int cbor_read_next(struct cbor_iter *iter, struct cbor_iter_output *out)
         return CERR_INVALID_DATA;
 
     // accept indefinite-length only for arrays and maps
-    if (out->info == 31 && (out->type == CT_ARRAY || out->type == CT_MAP || out->type == CT_SIMPLE))
+    if (out->type == CT_ARRAY || out->type == CT_MAP)
+        return (out->info == 31) ? CERR_OK : CERR_INVALID_DATA;
+    if (out->type == CT_SIMPLE && out->info == 31)
         return CERR_OK;
-    else if (out->info >= 28)
+    if (out->info >= 28)
         return CERR_INVALID_DATA;
 
     // interpret additional info remaining bytes, if any
@@ -325,12 +339,15 @@ int connie_writer_init(struct connie_writer *writer, uint8_t *buffer, size_t siz
     }
     else
     {
-        writer->begin = writer->cursor = buffer;
+        writer->begin = writer->ptr = buffer;
         writer->end = buffer + size;
+
+        uint8_t buffer[2];
         // empty metadata map (not used for now)
-        *writer->cursor++ = (CT_MAP << 5);
+        buffer[0] = (CT_MAP << 5);
         // open root document
-        *writer->cursor++ = ((CT_MAP << 5) | 0x1F);
+        buffer[1] = ((CT_MAP << 5) | 0x1F);
+        write_callback(buffer, sizeof(buffer), writer);
     }
 
     return CERR_OK;
@@ -346,14 +363,13 @@ int connie_writer_finish(struct connie_writer *writer, uint8_t **output, size_t 
         *size = writer->size + 1;
     else
     {
-        if (writer->cursor >= writer->end)
-            RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-        *writer->cursor++ = 0xFF; // type 0x07, info 0x1F
+        uint8_t buffer = 0xFF; // type 0x07, info 0x1F
+        write_callback(&buffer, sizeof(buffer), writer);
 
         if (output != NULL)
             *output = writer->begin;
         if (size != NULL)
-            *size = (size_t) (writer->cursor - writer->begin);
+            *size = (size_t) (writer->ptr - writer->begin);
     }
 
     writer->flags |= DWF_INVALID;
@@ -405,12 +421,8 @@ int connie_writer_put_fp64(struct connie_writer *writer, uint32_t key1, const ch
 int connie_writer_put_bytes(struct connie_writer *writer, uint32_t key1, const char *key2, const uint8_t *data, size_t length)
 {
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
-    cbor_write_uint(writer, CT_BSTR, length); // definite-length byte string
-    if (writer->cursor + length >= writer->end)
-        RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-    memcpy(writer->cursor, data, length);
-    writer->cursor += length;
-    return CERR_OK;
+    RETURN_ON_ERROR(cbor_write_uint(writer, CT_BSTR, length)); // definite-length byte string
+    return write_callback(data, length, writer);
 }
 
 int connie_writer_put_null(struct connie_writer *writer, uint32_t key1, const char *key2)
@@ -435,9 +447,8 @@ int connie_writer_open_map(struct connie_writer *writer, uint32_t key1, const ch
         ++writer->size;
     else
     {
-        if (writer->cursor >= writer->end)
-            RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-        *writer->cursor++ = (CT_MAP << 5) | 0x1F; // indefinite-length map
+        uint8_t buffer = (CT_MAP << 5) | 0x1F; // indefinite-length map
+        RETURN_ON_ERROR(write_callback(&buffer, sizeof(buffer), writer));
     }
     return CERR_OK;
 }
@@ -453,9 +464,8 @@ int connie_writer_close_map(struct connie_writer *writer)
         ++writer->size;
     else
     {
-        if (writer->cursor >= writer->end)
-            RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-        *writer->cursor++ = 0xFF; // type 0x07, extra info 0x1F
+        uint8_t buffer = 0xFF; // type 0x07, extra info 0x1F
+        RETURN_ON_ERROR(write_callback(&buffer, sizeof(buffer), writer));
     }
     return CERR_OK;
 }
@@ -470,9 +480,8 @@ int connie_writer_open_array(struct connie_writer *writer, uint32_t key1, const 
         ++writer->size;
     else
     {
-        if (writer->cursor >= writer->end)
-            RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-        *writer->cursor++ = (CT_ARRAY << 5) | 0x1F; // indefinite-length array
+        uint8_t buffer = (CT_ARRAY << 5) | 0x1F; // indefinite-length array
+        RETURN_ON_ERROR(write_callback(&buffer, sizeof(buffer), writer));
     }
     return CERR_OK;
 }
@@ -488,9 +497,8 @@ int connie_writer_close_array(struct connie_writer *writer)
         ++writer->size;
     else
     {
-        if (writer->cursor >= writer->end)
-            RETURN_WRITER_ERROR(writer, CERR_OUT_OF_BOUNDS);
-        *writer->cursor++ = 0xFF; // type 0x07, extra info 0x1F
+        uint8_t buffer = 0xFF; // type 0x07, extra info 0x1F
+        RETURN_ON_ERROR(write_callback(&buffer, sizeof(buffer), writer));
     }
     return CERR_OK;
 }
