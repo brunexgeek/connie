@@ -56,21 +56,25 @@
 extern "C" {
 #endif
 
-typedef void doc_commit_callback(const uint8_t *buffer, size_t size, void *data);
+typedef int doc_commit_callback(const uint8_t *buffer, size_t size, void *data);
 
 struct connie_writer_params {
-    // Pointer to the memory buffer where CBOR data will be written.
+    // Pointer to the memory buffer to write
     uint8_t *buffer;
-    // Size of the buffer in bytes.
+    // Size of the buffer in bytes
     size_t buffer_size;
-    uint8_t key_type;
-    // Callback to deliver serialized data.
+    // Write callback
     doc_commit_callback *callback;
+    // Application-specific data
+    void *data;
+    // Type of key to be used
+    uint8_t key_type;
 };
 
 struct connie_writer {
     uint8_t scope[CLIMITS_DEPTH]; // CTYPE_MAP or CTYPE_ARRAY
-    struct connie_writer_params params;
+    doc_commit_callback *callback;
+    void *data;
     uint8_t *begin;
     uint8_t *end;
     uint8_t *ptr;
@@ -88,11 +92,9 @@ struct cbor_iter {
 struct connie_reader {
     struct cbor_iter iter;
     uint8_t scope[CLIMITS_DEPTH]; // CTYPE_MAP or CTYPE_ARRAY
-    uint16_t scope_count : 6;
-    uint16_t invalid : 1;
-    uint16_t complete : 1;
-    uint16_t key_type : 2;
-    uint16_t reserved : 6;
+    uint8_t scope_count;
+    uint8_t flags;
+    uint8_t key_type;
 };
 
 struct connie_output {
@@ -126,7 +128,7 @@ struct connie_output {
  * @param size   Size of the buffer in bytes.
  * @return DOCERR_OK on success, or a DOCERR_* code on failure.
  */
-int connie_writer_init(struct connie_writer *writer, uint8_t *buffer, size_t size, uint8_t key_type );
+int connie_writer_init(struct connie_writer *writer, struct connie_writer_params *params );
 
 /**
  * Finalizes the document and returns the encoded CBOR output.

@@ -88,15 +88,35 @@ static void print_document(const uint8_t *buffer, int size)
 #define DETECT_ERROR(x) \
     do { int err = (x); if (err != CERR_OK) printf("Error %d at %s:%d\n", err, __FILE__, __LINE__);} while (0)
 
+static int write_to_file(const uint8_t *buffer, size_t size, void *data)
+{
+    fwrite(buffer, size, 1, (FILE*)data);
+    return CERR_OK;
+}
+
 int main(int argc, char **argv)
 {
     (void) argc;
     (void) argv;
-    int dry_run = 0;
+
     uint8_t buffer[128];
+    FILE *out = NULL;
+    if (argc == 2)
+        out = fopen(argv[1], "wb");
+
+    struct connie_writer_params params = {
+        .buffer = buffer,
+        .buffer_size = sizeof(buffer),
+        .callback = out != NULL ? write_to_file : NULL,
+        .data = out != NULL ? out : NULL,
+        .key_type = CKEY_UINT,
+    };
+
+    int dry_run = 0;
+
     struct connie_writer writer;
     uint32_t key = 0;
-    DETECT_ERROR(connie_writer_init(&writer, dry_run ? NULL : buffer, sizeof(buffer), CKEY_UINT));
+    DETECT_ERROR(connie_writer_init(&writer, &params));
 
     DETECT_ERROR(connie_writer_put_string(&writer, ++key, "name", "Alice"));
     DETECT_ERROR(connie_writer_put_int32(&writer, ++key, "age", -30));
@@ -121,12 +141,17 @@ int main(int argc, char **argv)
     size_t size = 0;
     DETECT_ERROR(connie_writer_finish(&writer, NULL, &size));
 
-    hex_dump(buffer, size);
+    if (out != NULL)
+        fclose(out);
+    else
+    {
+        hex_dump(buffer, size);
 
-    print_document(buffer, size);
+        print_document(buffer, size);
 
-    puts("\nDiagnotisc output:");
-    connie_diagnostic(buffer, size);
+        puts("\nDiagnotisc output:");
+        connie_diagnostic(buffer, size);
+    }
 
     return 0;
 }

@@ -29,23 +29,21 @@
 #define CT_TAG     6
 #define CT_SIMPLE  7
 
-#define DWF_DRY_RUN 1
-#define DWF_INVALID 2
+#define CWF_DRY_RUN 1
+#define CWF_INVALID 2
 
-#define IS_VALID_TYPE(x) \
-    ( ((x) >= TYPE_DOUBLE && (x) <= TYPE_NULL) || \
-      (x) == TYPE_INT32 || \
-      (x) == TYPE_INT64 || \
-      (x) == TYPE_DECIMAL )
+#define CRF_COMPLETE 1
+#define CRF_INVALID  2
 
 #define RETURN_ON_ERROR(expr) \
     do { int err = (expr); if (err != CERR_OK) return err; } while (0)
 
 #define RETURN_IF_INVALID(writer) \
-    do { if ((writer)->flags & DWF_INVALID) return CERR_INVALID_STATE; } while (0)
+    do { if ((writer) == NULL) return CERR_INVALID_ARGUMENT; \
+         if ((writer)->flags & CWF_INVALID) return CERR_INVALID_STATE; } while (0)
 
 #define RETURN_WRITER_ERROR(writer, code) \
-    do { (writer)->flags |= DWF_INVALID; return code; } while (0)
+    do { (writer)->flags |= CWF_INVALID; return code; } while (0)
 
 static const size_t EMPTY_DOC_SIZE = 3;
 
@@ -56,35 +54,32 @@ struct cbor_iter_output {
     // Interpreted additional info
     uint64_t value;
     // Raw additional info
-    uint16_t info : 5;
+    uint8_t info;
     // Major type
-    uint16_t type : 3;
+    uint8_t type;
     // Number of bytes that make up the additional information
-    uint16_t ibytes : 4;
-    uint16_t reserved : 4;
+    uint8_t ibytes;
 };
 
 static void hex_dump(const uint8_t *data, int size);
 
-static int write_callback(const uint8_t *buffer, size_t size, void *data)
+static inline int write_callback(const uint8_t *buffer, size_t size, void *data)
 {
     struct connie_writer *w = (struct connie_writer*) data;
+    if (w->callback)
+        return w->callback(buffer, size, w->data);
     if (w->ptr + size >= w->end)
         return CERR_OUT_OF_BOUNDS;
     memcpy(w->ptr, buffer, size);
     w->ptr += size;
-    hex_dump(w->begin, (size_t)(w->ptr - w->begin));
-    puts("---");
     return CERR_OK;
 }
 
 static int cbor_write_fp32(struct connie_writer *writer, float value)
 {
-    if (writer->flags & DWF_DRY_RUN)
-    {
-        writer->size += 5;
+    writer->size += 5;
+    if (writer->flags & CWF_DRY_RUN)
         return CERR_OK;
-    }
 
     union {
         float fp;
@@ -101,17 +96,15 @@ static int cbor_write_fp32(struct connie_writer *writer, float value)
     for (int i = 3; i >= 0; i--)
         buffer[1 + 3 - i] = (uint8_t)(convert.uint >> (8 * i));
     #endif
-    write_callback(buffer, sizeof(buffer), writer);
+    RETURN_ON_ERROR(write_callback(buffer, sizeof(buffer), writer));
     return CERR_OK;
 }
 
 static int cbor_write_fp64(struct connie_writer *writer, double value)
 {
-    if (writer->flags & DWF_DRY_RUN)
-    {
-        writer->size += 9;
+    writer->size += 9;
+    if (writer->flags & CWF_DRY_RUN)
         return CERR_OK;
-    }
 
     union {
         double fp;
@@ -128,7 +121,7 @@ static int cbor_write_fp64(struct connie_writer *writer, double value)
     for (int i = 7; i >= 0; i--)
         buffer[1 + 7 - i] = (uint8_t)(convert.uint >> (8 * i));
     #endif
-    write_callback(buffer, sizeof(buffer), writer);
+    RETURN_ON_ERROR(write_callback(buffer, sizeof(buffer), writer));
     return CERR_OK;
 }
 
@@ -147,11 +140,9 @@ static int cbor_write_uint(struct connie_writer *writer, uint8_t type, uint64_t 
     else
         bytes = 9;
 
-    if (writer->flags & DWF_DRY_RUN)
-    {
-        writer->size += bytes;
+    writer->size += bytes;
+    if (writer->flags & CWF_DRY_RUN)
         return CERR_OK;
-    }
 
     uint8_t buffer[9];
     switch (bytes)
@@ -196,25 +187,37 @@ static int cbor_write_uint(struct connie_writer *writer, uint8_t type, uint64_t 
         default:
             return CERR_INVALID_DATA;
     }
-    write_callback(buffer, bytes, writer);
+    RETURN_ON_ERROR(write_callback(buffer, bytes, writer));
 
     return CERR_OK;
 }
 
 static int cbor_write_string(struct connie_writer *writer, const char *str)
 {
-    RETURN_IF_INVALID(writer);
-
     size_t len = strlen(str) + 1;
-    if (writer->flags & DWF_DRY_RUN)
-    {
-        writer->size += len;
+    writer->size += len;
+    if (writer->flags & CWF_DRY_RUN)
         return CERR_OK;
-    }
     else
     {
         RETURN_ON_ERROR(cbor_write_uint(writer, CT_TSTR, len)); // definite-length text string
         return write_callback((const uint8_t*) str, len, writer);
+    }
+}
+
+static inline int cbor_write_key(struct connie_writer *writer, uint32_t key1, const char *key2)
+{
+    if (writer->scope[writer->scope_index] == CTYPE_ARRAY_OPEN)
+        return CERR_OK;
+
+    if (writer->key_type == CKEY_UINT)
+        return cbor_write_uint(writer, CT_UINT, key1);
+    else if (writer->key_type == CKEY_STRING && key2 != NULL)
+        return cbor_write_string(writer, key2);
+    else
+    {
+        writer->flags |= CWF_INVALID;
+        return CERR_INVALID_KEY;
     }
 }
 
@@ -304,67 +307,52 @@ static int cbor_read_next(struct cbor_iter *iter, struct cbor_iter_output *out)
     return CERR_OK;
 }
 
-static inline int cbor_write_key(struct connie_writer *writer, uint32_t key1, const char *key2)
+int connie_writer_init(struct connie_writer *writer, struct connie_writer_params *params )
 {
-    RETURN_IF_INVALID(writer);
-
-    if (writer->scope[writer->scope_index] == CTYPE_ARRAY_OPEN)
-        return CERR_OK;
-
-    if (writer->key_type == CKEY_UINT)
-        return cbor_write_uint(writer, CT_UINT, key1);
-    else if (writer->key_type == CKEY_STRING && key2 != NULL)
-        return cbor_write_string(writer, key2);
-    else
-    {
-        writer->flags |= DWF_INVALID;
-        return CERR_INVALID_KEY;
-    }
-}
-
-int connie_writer_init(struct connie_writer *writer, uint8_t *buffer, size_t size, uint8_t key_type )
-{
-    if (writer == NULL || (key_type != CKEY_STRING && key_type != CKEY_UINT))
+    if (writer == NULL || params == NULL || (params->key_type != CKEY_STRING && params->key_type != CKEY_UINT))
         return CERR_INVALID_ARGUMENT;
-    //if (params->buffer == NULL || params->buffer_size == 0 && params->callback == NULL)
-    //    return CERR_INVALID_ARGUMENT;
 
     memset(writer, 0, sizeof(struct connie_writer));
     writer->scope[0] = CTYPE_MAP_OPEN;
-    writer->key_type = key_type;
-    if (buffer == NULL || size == 0)
+    writer->key_type = params->key_type;
+
+    if (params->callback != NULL)
     {
-        writer->flags |= DWF_DRY_RUN;
-        writer->size += 2;
+        writer->callback = params->callback;
+        writer->data = params->data;
     }
     else
+    if (params->buffer != NULL && params->buffer_size > 0)
     {
-        writer->begin = writer->ptr = buffer;
-        writer->end = buffer + size;
-
-        uint8_t buffer[2];
-        // empty metadata map (not used for now)
-        buffer[0] = (CT_MAP << 5);
-        // open root document
-        buffer[1] = ((CT_MAP << 5) | 0x1F);
-        write_callback(buffer, sizeof(buffer), writer);
+        writer->begin = writer->ptr = params->buffer;
+        writer->end = params->buffer + params->buffer_size;
     }
+    else
+        writer->flags |= CWF_DRY_RUN;
+
+    // write empty metadata map (not used for now) and root map
+    uint8_t buffer[2];
+    buffer[0] = (CT_MAP << 5);
+    buffer[1] = ((CT_MAP << 5) | 0x1F);
+    writer->size = 2;
+
+    RETURN_ON_ERROR(write_callback(buffer, sizeof(buffer), writer));
 
     return CERR_OK;
 }
 
 int connie_writer_finish(struct connie_writer *writer, uint8_t **output, size_t *size)
 {
-    if (writer == NULL || size == NULL)
-        return CERR_INVALID_ARGUMENT;
     RETURN_IF_INVALID(writer);
+    if (size == NULL)
+        return CERR_INVALID_ARGUMENT;
 
-    if (writer->flags & DWF_DRY_RUN)
+    if (writer->flags & CWF_DRY_RUN)
         *size = writer->size + 1;
     else
     {
         uint8_t buffer = 0xFF; // type 0x07, info 0x1F
-        write_callback(&buffer, sizeof(buffer), writer);
+        RETURN_ON_ERROR(write_callback(&buffer, sizeof(buffer), writer));
 
         if (output != NULL)
             *output = writer->begin;
@@ -372,12 +360,15 @@ int connie_writer_finish(struct connie_writer *writer, uint8_t **output, size_t 
             *size = (size_t) (writer->ptr - writer->begin);
     }
 
-    writer->flags |= DWF_INVALID;
+    writer->flags |= CWF_INVALID;
     return CERR_OK;
 }
 
 int connie_writer_put_string(struct connie_writer *writer, uint32_t key1, const char *key2, const char *value)
 {
+    if (value == NULL)
+        return connie_writer_put_null(writer, key1, key2);
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     return cbor_write_string(writer, value);
 }
@@ -389,6 +380,7 @@ int connie_writer_put_int32(struct connie_writer *writer, uint32_t key1, const c
 
 int connie_writer_put_int64(struct connie_writer *writer, uint32_t key1, const char *key2, int64_t value)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     if (value >= 0)
         return cbor_write_uint(writer, CT_UINT, (uint64_t) value);
@@ -402,24 +394,28 @@ int connie_writer_put_uint32(struct connie_writer *writer, uint32_t key1, const 
 
 int connie_writer_put_uint64(struct connie_writer *writer, uint32_t key1, const char *key2, uint64_t value)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     return cbor_write_uint(writer, CT_UINT, value);
 }
 
 int connie_writer_put_fp32(struct connie_writer *writer, uint32_t key1, const char *key2, float value)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     return cbor_write_fp32(writer, value);
 }
 
 int connie_writer_put_fp64(struct connie_writer *writer, uint32_t key1, const char *key2, double value)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     return cbor_write_fp64(writer, value);
 }
 
 int connie_writer_put_bytes(struct connie_writer *writer, uint32_t key1, const char *key2, const uint8_t *data, size_t length)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     RETURN_ON_ERROR(cbor_write_uint(writer, CT_BSTR, length)); // definite-length byte string
     return write_callback(data, length, writer);
@@ -427,23 +423,26 @@ int connie_writer_put_bytes(struct connie_writer *writer, uint32_t key1, const c
 
 int connie_writer_put_null(struct connie_writer *writer, uint32_t key1, const char *key2)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     return cbor_write_uint(writer, CT_SIMPLE, 22); // simple value, null
 }
 
 int connie_writer_put_boolean(struct connie_writer *writer, uint32_t key1, const char *key2, int value)
 {
+    RETURN_IF_INVALID(writer);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     return cbor_write_uint(writer, CT_SIMPLE, value ? 21 : 20); // simple value
 }
 
 int connie_writer_open_map(struct connie_writer *writer, uint32_t key1, const char *key2)
 {
+    RETURN_IF_INVALID(writer);
     if (writer->scope_index + 1 >= CLIMITS_DEPTH)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_OVERFLOW);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     writer->scope[++writer->scope_index] = CTYPE_MAP_OPEN;
-    if (writer->flags & DWF_DRY_RUN)
+    if (writer->flags & CWF_DRY_RUN)
         ++writer->size;
     else
     {
@@ -455,12 +454,13 @@ int connie_writer_open_map(struct connie_writer *writer, uint32_t key1, const ch
 
 int connie_writer_close_map(struct connie_writer *writer)
 {
+    RETURN_IF_INVALID(writer);
     if (writer->scope_index == 0)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_UNDERFLOW);
     if (writer->scope[writer->scope_index] != CTYPE_MAP_OPEN)
         RETURN_WRITER_ERROR(writer, CERR_INVALID_STATE);
     --writer->scope_index;
-    if (writer->flags & DWF_DRY_RUN)
+    if (writer->flags & CWF_DRY_RUN)
         ++writer->size;
     else
     {
@@ -472,11 +472,12 @@ int connie_writer_close_map(struct connie_writer *writer)
 
 int connie_writer_open_array(struct connie_writer *writer, uint32_t key1, const char *key2)
 {
+    RETURN_IF_INVALID(writer);
     if (writer->scope_index + 1 >= CLIMITS_DEPTH)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_OVERFLOW);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
     writer->scope[++writer->scope_index] = CTYPE_ARRAY_OPEN;
-    if (writer->flags & DWF_DRY_RUN)
+    if (writer->flags & CWF_DRY_RUN)
         ++writer->size;
     else
     {
@@ -488,12 +489,13 @@ int connie_writer_open_array(struct connie_writer *writer, uint32_t key1, const 
 
 int connie_writer_close_array(struct connie_writer *writer)
 {
+    RETURN_IF_INVALID(writer);
     if (writer->scope_index == 0)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_UNDERFLOW);
     if (writer->scope[writer->scope_index] != CTYPE_ARRAY_OPEN)
         RETURN_WRITER_ERROR(writer, CERR_INVALID_STATE);
     --writer->scope_index;
-    if (writer->flags & DWF_DRY_RUN)
+    if (writer->flags & CWF_DRY_RUN)
         ++writer->size;
     else
     {
@@ -507,7 +509,7 @@ int connie_reader_init(struct connie_reader *reader, const uint8_t *buffer, size
 {
     if (buffer == NULL || size < EMPTY_DOC_SIZE)
         return CERR_INVALID_ARGUMENT;
-    reader->invalid = 1;
+    reader->flags = CRF_INVALID;
 
     // empty metadata map (not used for now)
     if (buffer[0] != (CT_MAP << 5))
@@ -546,7 +548,7 @@ static inline int connie_reader_iterate(struct connie_reader *reader, struct con
 {
     if (reader == NULL || output == NULL)
         return CERR_INVALID_ARGUMENT;
-    if (reader->complete)
+    if (reader->flags & CRF_COMPLETE)
         return CERR_COMPLETE;
 
     memset(output, 0, sizeof(struct connie_output));
@@ -560,7 +562,8 @@ static inline int connie_reader_iterate(struct connie_reader *reader, struct con
         if (reader->scope_count == 0)
             return CERR_DEPTH_UNDERFLOW;
         output->type = reader->scope[--reader->scope_count];
-        reader->complete = reader->scope_count == 0;
+        if (reader->scope_count == 0)
+            reader->flags |= CRF_COMPLETE;
         return CERR_OK;
     }
     else
@@ -647,7 +650,7 @@ int connie_reader_next(struct connie_reader *reader, struct connie_output *outpu
 {
     int result = connie_reader_iterate(reader, output);
     if (result != CERR_OK && result != CERR_COMPLETE)
-        reader->invalid = 1;
+        reader->flags |= CRF_INVALID;
     return result;
 }
 
