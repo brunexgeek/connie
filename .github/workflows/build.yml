@@ -1,0 +1,15 @@
+name: C/C++ CI
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v1
+    - name: dependencies
+      run: sudo apt-get install gcc
+    - name: compilation
+      run: chmod a+x build.sh && ./build.sh
