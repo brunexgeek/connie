@@ -8,8 +8,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: dependencies
-      run: sudo apt-get install gcc
+      run: sudo apt-get install -y gcc cmake make
+    - name: prepare
+      run: cmake .
     - name: compilation
-      run: chmod a+x build.sh && ./build.sh
+      run: make
