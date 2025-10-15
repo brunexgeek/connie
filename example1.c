@@ -17,13 +17,14 @@ static void hex_dump(const uint8_t *data, size_t size)
     printf("\n");
 }
 
-static void print_document(const uint8_t *buffer, size_t size)
+static int print_document(const uint8_t *buffer, size_t size)
 {
+    int result = 0;
     int indent = 0;
     struct connie_output output;
     struct connie_reader reader;
     connie_reader_init(&reader, buffer, size);
-    while (connie_reader_next(&reader, &output) == CERR_OK)
+    while ((result = connie_reader_next(&reader, &output)) == CERR_OK)
     {
         for (int i = 0; i < indent; ++i)
             fputs("  ", stdout);
@@ -40,22 +41,22 @@ static void print_document(const uint8_t *buffer, size_t size)
                 break;
             case CTYPE_MAP_OPEN:
                 ++indent;
-                puts("map::open");
+                puts("{");
                 break;
             case CTYPE_MAP_CLOSE:
                 --indent;
-                puts("map::close");
+                puts("}");
                 break;
             case CTYPE_ARRAY_OPEN:
                 ++indent;
-                puts("array::open");
+                puts("[");
                 break;
             case CTYPE_ARRAY_CLOSE:
                 --indent;
-                puts("array::close");
+                puts("]");
                 break;
             case CTYPE_BYTES:
-                puts("<data>\n");
+                puts("<binary data>\n");
                 break;
             case CTYPE_BOOL:
                 printf("%s\n", output.value_boolean != 0 ? "true" : "false");
@@ -83,10 +84,16 @@ static void print_document(const uint8_t *buffer, size_t size)
                 break;
         }
     }
+
+    return result;
 }
 
 #define DETECT_ERROR(x) \
-    do { int err = (x); if (err != CERR_OK) printf("Error %d at %s:%d\n", err, __FILE__, __LINE__);} while (0)
+    do  { int err = (x); \
+         if (err != CERR_OK) { \
+             printf("Error %d at %s:%d\n", err, __FILE__, __LINE__); \
+             return 1; \
+        }} while (0)
 
 static int write_to_file(const uint8_t *buffer, size_t size, void *data)
 {
@@ -145,10 +152,12 @@ int main(int argc, char **argv)
     {
         hex_dump(buffer, size);
 
-        print_document(buffer, size);
+        if (print_document(buffer, size) != CERR_COMPLETE)
+            return 1;
 
         puts("\nDiagnotisc output:");
-        connie_diagnostic(buffer, size);
+        if (connie_diagnostic(buffer, size) != CERR_COMPLETE)
+            return 1;
     }
 
     return 0;

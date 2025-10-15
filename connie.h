@@ -1,5 +1,5 @@
 /*
- * connie (concise nested information encoder)
+ * connie
  * Copyright 2025 Bruno Costa
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,13 +28,13 @@
 #define CTYPE_UINT64      5
 #define CTYPE_BOOL        6
 #define CTYPE_NULL        7
-#define CTYPE_MAP_OPEN    8
-#define CTYPE_MAP_CLOSE   9
-#define CTYPE_ARRAY_OPEN  10
-#define CTYPE_ARRAY_CLOSE 11
-#define CTYPE_BYTES       12
-#define CTYPE_FP32        13
-#define CTYPE_FP64        14
+#define CTYPE_BYTES       8
+#define CTYPE_FP32        9
+#define CTYPE_FP64        10
+#define CTYPE_MAP_OPEN    11
+#define CTYPE_ARRAY_OPEN  12
+#define CTYPE_MAP_CLOSE   13
+#define CTYPE_ARRAY_CLOSE 14
 
 #define CKEY_UNKNOWN      0
 #define CKEY_UINT         1
@@ -49,8 +49,6 @@
 #define CERR_DEPTH_OVERFLOW   (-6)
 #define CERR_DEPTH_UNDERFLOW  (-7)
 #define CERR_OUT_OF_BOUNDS    (-8)
-
-#define CLIMITS_DEPTH 64
 
 #ifdef _cplusplus
 extern "C" {
@@ -72,7 +70,7 @@ struct connie_writer_params {
 };
 
 struct connie_writer {
-    uint8_t scope[CLIMITS_DEPTH]; // CTYPE_MAP or CTYPE_ARRAY
+    uint64_t scope; // bitmap: 0 = map, 1 = array
     doc_commit_callback *callback;
     void *data;
     uint8_t *begin;
@@ -91,7 +89,7 @@ struct cbor_iter {
 
 struct connie_reader {
     struct cbor_iter iter;
-    uint8_t scope[CLIMITS_DEPTH]; // CTYPE_MAP or CTYPE_ARRAY
+    uint64_t scope; // bitmap: 0 = map, 1 = array
     uint8_t scope_count;
     uint8_t flags;
     uint8_t key_type;

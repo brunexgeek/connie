@@ -35,6 +35,8 @@
 #define CRF_COMPLETE 1
 #define CRF_INVALID  2
 
+#define CLIMITS_DEPTH (uint8_t)(sizeof(uint64_t) * 8)
+
 #define RETURN_ON_ERROR(expr) \
     do { int err = (expr); if (err != CERR_OK) return err; } while (0)
 
@@ -44,6 +46,8 @@
 
 #define RETURN_WRITER_ERROR(writer, code) \
     do { (writer)->flags |= CWF_INVALID; return code; } while (0)
+
+#define GET_BIT_VALUE(bit, number) (((number) >> (bit)) & 1)
 
 static const size_t EMPTY_DOC_SIZE = 3;
 
@@ -207,7 +211,7 @@ static int cbor_write_string(struct connie_writer *writer, const char *str)
 
 static inline int cbor_write_key(struct connie_writer *writer, uint32_t key1, const char *key2)
 {
-    if (writer->scope[writer->scope_index] == CTYPE_ARRAY_OPEN)
+    if (GET_BIT_VALUE(writer->scope_index, writer->scope))
         return CERR_OK;
 
     if (writer->key_type == CKEY_UINT)
@@ -313,7 +317,6 @@ int connie_writer_init(struct connie_writer *writer, struct connie_writer_params
         return CERR_INVALID_ARGUMENT;
 
     memset(writer, 0, sizeof(struct connie_writer));
-    writer->scope[0] = CTYPE_MAP_OPEN;
     writer->key_type = params->key_type;
 
     if (params->callback != NULL)
@@ -441,7 +444,8 @@ int connie_writer_open_map(struct connie_writer *writer, uint32_t key1, const ch
     if (writer->scope_index + 1 >= CLIMITS_DEPTH)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_OVERFLOW);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
-    writer->scope[++writer->scope_index] = CTYPE_MAP_OPEN;
+    ++writer->scope_index;
+    writer->scope &= ~((uint64_t)1 << writer->scope_index);
     if (writer->flags & CWF_DRY_RUN)
         ++writer->size;
     else
@@ -457,7 +461,7 @@ int connie_writer_close_map(struct connie_writer *writer)
     RETURN_IF_INVALID(writer);
     if (writer->scope_index == 0)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_UNDERFLOW);
-    if (writer->scope[writer->scope_index] != CTYPE_MAP_OPEN)
+    if (GET_BIT_VALUE(writer->scope_index, writer->scope))
         RETURN_WRITER_ERROR(writer, CERR_INVALID_STATE);
     --writer->scope_index;
     if (writer->flags & CWF_DRY_RUN)
@@ -476,7 +480,8 @@ int connie_writer_open_array(struct connie_writer *writer, uint32_t key1, const 
     if (writer->scope_index + 1 >= CLIMITS_DEPTH)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_OVERFLOW);
     RETURN_ON_ERROR(cbor_write_key(writer, key1, key2));
-    writer->scope[++writer->scope_index] = CTYPE_ARRAY_OPEN;
+    ++writer->scope_index;
+    writer->scope |= ((uint64_t)1 << writer->scope_index);
     if (writer->flags & CWF_DRY_RUN)
         ++writer->size;
     else
@@ -492,7 +497,7 @@ int connie_writer_close_array(struct connie_writer *writer)
     RETURN_IF_INVALID(writer);
     if (writer->scope_index == 0)
         RETURN_WRITER_ERROR(writer, CERR_DEPTH_UNDERFLOW);
-    if (writer->scope[writer->scope_index] != CTYPE_ARRAY_OPEN)
+    if (!GET_BIT_VALUE(writer->scope_index, writer->scope))
         RETURN_WRITER_ERROR(writer, CERR_INVALID_STATE);
     --writer->scope_index;
     if (writer->flags & CWF_DRY_RUN)
@@ -561,14 +566,15 @@ static inline int connie_reader_iterate(struct connie_reader *reader, struct con
     {
         if (reader->scope_count == 0)
             return CERR_DEPTH_UNDERFLOW;
-        output->type = reader->scope[--reader->scope_count];
+        --reader->scope_count;
+        output->type = CTYPE_MAP_CLOSE + GET_BIT_VALUE(reader->scope_count, reader->scope);
         if (reader->scope_count == 0)
             reader->flags |= CRF_COMPLETE;
         return CERR_OK;
     }
     else
     // only extract keys from maps
-    if (reader->scope_count > 0 && reader->scope[reader->scope_count - 1] == CTYPE_MAP_CLOSE)
+    if (reader->scope_count > 0 && GET_BIT_VALUE(reader->scope_count - 1, reader->scope) == 0)
     {
         // de we already selected a key type?
         if (reader->key_type == CKEY_UNKNOWN)
@@ -606,13 +612,13 @@ static inline int connie_reader_iterate(struct connie_reader *reader, struct con
                 if (++reader->scope_count >= CLIMITS_DEPTH)
                     return CERR_DEPTH_OVERFLOW;
                 output->type = CTYPE_ARRAY_OPEN;
-                reader->scope[reader->scope_count - 1] = CTYPE_ARRAY_CLOSE;
+                reader->scope |= (uint64_t)1 << (reader->scope_count - 1); // 1 -> CTYPE_ARRAY_CLOSE;
                 return CERR_OK;
             case CT_MAP:
                 if (++reader->scope_count >= CLIMITS_DEPTH)
                     return CERR_DEPTH_OVERFLOW;
                 output->type = CTYPE_MAP_OPEN;
-                reader->scope[reader->scope_count - 1] = CTYPE_MAP_CLOSE;
+                reader->scope &= ~((uint64_t)1 << (reader->scope_count - 1)); // 0 -> CTYPE_MAP_CLOSE;
                 return CERR_OK;
             case CT_SIMPLE:
             {
@@ -702,7 +708,11 @@ int connie_diagnostic(const uint8_t *buffer, size_t size)
             indent--;
         }
         if (out.ptr[0] == 0xFF)
+        {
             indent--;
+            if (indent == 0)
+                return CERR_COMPLETE;
+        }
         else if (out.info == 31)
             indent++;
     }
