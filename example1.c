@@ -7,9 +7,9 @@
 
 #define MIN_VALUE(X, Y) (((X) < (Y)) ? (X) : (Y))
 
-static void hex_dump(const uint8_t *data, int size)
+static void hex_dump(const uint8_t *data, size_t size)
 {
-    for (int i = 0; i < size; i++) {
+    for (size_t i = 0; i < size; i++) {
         if (i > 0 && (i % 16) == 0)
             puts("");
         printf("%02X ", data[i]);
@@ -17,7 +17,7 @@ static void hex_dump(const uint8_t *data, int size)
     printf("\n");
 }
 
-static void print_document(const uint8_t *buffer, int size)
+static void print_document(const uint8_t *buffer, size_t size)
 {
     int indent = 0;
     struct connie_output output;
@@ -111,8 +111,6 @@ int main(int argc, char **argv)
         .data = out != NULL ? out : NULL,
         .key_type = CKEY_UINT,
     };
-
-    int dry_run = 0;
 
     struct connie_writer writer;
     uint32_t key = 0;

@@ -115,9 +115,9 @@ struct connie_output {
     };
     // Length for strings and bytes
     size_t length;
-    uint8_t type : 4;
-    uint8_t key_type : 2;
-    uint8_t reserved : 2;
+    uint8_t type;
+    uint8_t key_type;
+    uint8_t reserved;
 };
 
 /**

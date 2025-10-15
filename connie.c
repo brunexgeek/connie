@@ -195,7 +195,7 @@ static int cbor_write_uint(struct connie_writer *writer, uint8_t type, uint64_t 
 static int cbor_write_string(struct connie_writer *writer, const char *str)
 {
     size_t len = strlen(str) + 1;
-    writer->size += len;
+    writer->size += (uint32_t) len;
     if (writer->flags & CWF_DRY_RUN)
         return CERR_OK;
     else
@@ -578,7 +578,7 @@ static inline int connie_reader_iterate(struct connie_reader *reader, struct con
         if (reader->key_type == CKEY_STRING && out.type == CT_TSTR)
             output->key_string = (const char*) out.ptr + 1 + out.ibytes;
         else if (reader->key_type == CKEY_UINT && out.type == CT_UINT)
-            output->key_uint32 = out.value;
+            output->key_uint32 = (uint32_t) out.value;
         else
             return CERR_INVALID_KEY;
         RETURN_ON_ERROR(result = cbor_read_next(&reader->iter, &out));
